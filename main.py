@@ -1,9 +1,8 @@
 import os
 import zipfile
-import io
+import sqlite3
 import PyPDF2
-from transformers import pipeline
-
+# from transformers import pipeline
 
 def extract_pdf_text_from_zip(zip_path, pdf_filename, max_chars=1000):
     """
@@ -40,49 +39,45 @@ def extract_pdf_text_from_zip(zip_path, pdf_filename, max_chars=1000):
         return f"Error extracting text: {str(e)}"
 
 
-def summarize_text(text, max_length=150, min_length=50):
-    """Generate a concise summary of the text"""
-    summarizer = pipeline("summarization")
-    summaries = summarizer(text, max_length=max_length, min_length=min_length, do_sample=False)
-    return summaries[0]['summary_text']
+# def summarize_text(text, max_length=150, min_length=50):
+#     """Generate a concise summary of the text"""
+#     summarizer = pipeline("summarization")
+#     summaries = summarizer(text, max_length=max_length, min_length=min_length, do_sample=False)
+#     return summaries[0]['summary_text']
 
 
-def process_zip_archives(root_directory):
-    """Recursively process ZIP archives and create an index"""
-    pdf_index = []
+def create_pdf_contents_table(db_path='pdf_archive.db'):
+    """
+    Create PDF contents table in SQLite database
 
-    for root, dirs, files in os.walk(root_directory):
-        for file in files:
-            if file.endswith('.zip'):
-                zip_path = os.path.join(root, file)
+    Args:
+    - db_path: Path to SQLite database
 
-                try:
-                    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                        pdf_files = [f for f in zip_ref.namelist() if f.lower().endswith('.pdf')]
+    Returns:
+    - sqlite3.Connection object
+    """
+    try:
+        # Establish database connection
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
 
-                        for pdf_filename in pdf_files:
-                            try:
-                                # Extract text from PDF without full archive extraction
-                                pdf_text = extract_pdf_text_from_zip(zip_path, pdf_filename)
+        # Create table if not exists
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS pdf_contents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                zip_path TEXT,
+                pdf_filename TEXT,
+                raw_text TEXT
+            )
+        ''')
 
-                                # Generate summary
-                                summary = summarize_text(pdf_text)
+        # Commit changes and return connection
+        conn.commit()
+        return conn
 
-                                # Create index entry
-                                pdf_index.append({
-                                    'zip_path': zip_path,
-                                    'pdf_filename': pdf_filename,
-                                    'summary': summary
-                                })
-
-                            except Exception as pdf_error:
-                                print(f"Error processing PDF {pdf_filename} in {zip_path}: {pdf_error}")
-
-                except Exception as zip_error:
-                    print(f"Error processing ZIP archive {zip_path}: {zip_error}")
-
-    return pdf_index
-
+    except sqlite3.Error as e:
+        print(f"Error creating database: {e}")
+        return None
 
 def write_to_file(error, zip_path, pdf_filename='', output_file='pdf_index.txt'):
     with open(output_file, 'a', encoding='utf-8') as f:
@@ -90,7 +85,92 @@ def write_to_file(error, zip_path, pdf_filename='', output_file='pdf_index.txt')
         f.write(f"pdf_filename: {pdf_filename}\n")
         f.write(f"error: {error}\n\n")
 
+def process_zip_archives_to_sqlite(conn, root_directory, batch_size=10):
+    """
+    Process ZIP archives and write PDF contents to SQLite database in batches
 
-# Example usage
-root_directory = '/path/to/your/zip/archives'
-pdf_index = process_zip_archives(root_directory)
+    Args:
+    - conn: SQLite database connection
+    - root_directory: Root directory containing ZIP archives
+    - batch_size: Number of records to insert in a single batch
+    """
+    # Create cursor
+    cursor = conn.cursor()
+
+    # Batch to store records
+    batch = []
+
+    try:
+        # Walk through directories
+        for root, dirs, files in os.walk(root_directory):
+            for file in files:
+                if file.lower().endswith('.zip'):
+                    zip_path = os.path.join(root, file)
+
+                    try:
+                        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                            # Find PDF files in the archive
+                            pdf_files = [f for f in zip_ref.namelist() if f.lower().endswith('.pdf')]
+                            relative_zip_path = os.path.relpath(zip_path, root_directory)
+                            # Process each PDF
+                            for pdf_filename in pdf_files:
+                                try:
+                                    # Extract raw text
+                                    raw_text = extract_pdf_text_from_zip(zip_path, pdf_filename)
+
+                                    # Add to batch
+                                    batch.append((relative_zip_path, pdf_filename, raw_text))
+
+                                    # Insert batch when it reaches batch_size
+                                    if len(batch) >= batch_size:
+                                        cursor.executemany(
+                                            'INSERT INTO pdf_contents (zip_path, pdf_filename, raw_text) VALUES (?, ?, ?)',
+                                            batch
+                                        )
+                                        conn.commit()
+                                        batch = []  # Reset batch
+
+                                except Exception as pdf_error:
+                                    print(f"Error processing PDF {pdf_filename} in {zip_path}: {pdf_error}")
+                                    write_to_file(pdf_error, zip_path, pdf_filename)
+
+                    except Exception as zip_error:
+                        print(f"Error processing ZIP archive {zip_path}: {zip_error}")
+                        write_to_file(zip_error, zip_path)
+
+        # Insert any remaining records
+        if batch:
+            cursor.executemany(
+                'INSERT INTO pdf_contents (zip_path, pdf_filename, raw_text) VALUES (?, ?, ?)',
+                batch
+            )
+            conn.commit()
+
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+
+
+# Main execution
+def main():
+    # Paths
+    root_directory = '/path/to/your/zip/archives'
+    db_path = 'pdf_archive.db'
+
+    conn = create_pdf_contents_table(db_path)
+
+    if conn:
+        try:
+            # 2. Process archives
+            process_zip_archives_to_sqlite(conn, root_directory)
+            print("PDF contents have been processed and stored in the database.")
+
+        finally:
+            # Always close the connection
+            conn.close()
+    else:
+        print("Failed to create database connection.")
+
+
+# Run the script
+if __name__ == "__main__":
+    main()
