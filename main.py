@@ -1,10 +1,12 @@
+import json
 import os
 import zipfile
 import sqlite3
 import PyPDF2
+from urllib.parse import unquote
 # from transformers import pipeline
 
-def extract_pdf_text_from_zip(zip_path, pdf_filename, max_chars=1000):
+def extract_pdf_text_from_zip(zip_path, pdf_filename, max_pages=10, max_chars=10000):
     """
     Extract text from the first page of a PDF within a ZIP archive
     Focuses on capturing key information efficiently
@@ -22,18 +24,14 @@ def extract_pdf_text_from_zip(zip_path, pdf_filename, max_chars=1000):
             with zip_ref.open(pdf_filename) as pdf_file:
                 pdf_reader = PyPDF2.PdfReader(pdf_file)
 
-                # Check if the PDF has at least one page
-                if len(pdf_reader.pages) > 0:
-                    # Extract text from the first page
-                    first_page_text = pdf_reader.pages[0].extract_text()
+                full_text = ""
+                for page in pdf_reader.pages[:max_pages]:
+                    full_text += page.extract_text()
 
-                    # Clean and truncate the text
-                    cleaned_text = ' '.join(first_page_text.split())  # Remove extra whitespace
-                    truncated_text = cleaned_text[:max_chars]
+                cleaned_text = ' '.join(full_text.split())  # Remove extra whitespace
+                truncated_text = cleaned_text[:max_chars]
 
-                    return truncated_text
-                else:
-                    return "Empty PDF"
+                return truncated_text
 
     except Exception as e:
         return f"Error extracting text: {str(e)}"
@@ -46,13 +44,11 @@ def extract_pdf_text_from_zip(zip_path, pdf_filename, max_chars=1000):
 #     return summaries[0]['summary_text']
 
 
-def create_pdf_contents_table(db_path='pdf_archive.db'):
+def create_pdf_contents_table(db_path='archive.db'):
     """
-    Create PDF contents table in SQLite database
-
+    Create PDF contents table in SQLite database with simplified schema
     Args:
     - db_path: Path to SQLite database
-
     Returns:
     - sqlite3.Connection object
     """
@@ -60,21 +56,41 @@ def create_pdf_contents_table(db_path='pdf_archive.db'):
         # Establish database connection
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-
-        # Create table if not exists
+        # Create main table with fields
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS pdf_contents (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 zip_path TEXT,
                 pdf_filename TEXT,
-                raw_text TEXT
+                raw_text TEXT,
+                metadata TEXT DEFAULT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-
-        # Commit changes and return connection
+        # Create virtual table for full-text search
+        cursor.execute('''
+            CREATE VIRTUAL TABLE IF NOT EXISTS pdf_contents_fts 
+            USING fts5(raw_text)
+        ''')
+        # Trigger to synchronize main table and FTS
+        cursor.execute('''
+            CREATE TRIGGER IF NOT EXISTS after_insert_pdf_contents 
+            AFTER INSERT ON pdf_contents BEGIN
+                INSERT INTO pdf_contents_fts(rowid, raw_text) 
+                VALUES (NEW.id, NEW.raw_text);
+            END
+        ''')
+        cursor.execute('''
+            CREATE TRIGGER IF NOT EXISTS after_update_pdf_contents 
+            AFTER UPDATE ON pdf_contents BEGIN
+                UPDATE pdf_contents_fts 
+                SET raw_text = NEW.raw_text 
+                WHERE rowid = NEW.id;
+            END
+        ''')
+        # Commit changes
         conn.commit()
         return conn
-
     except sqlite3.Error as e:
         print(f"Error creating database: {e}")
         return None
@@ -99,6 +115,7 @@ def process_zip_archives_to_sqlite(conn, root_directory, batch_size=10):
 
     # Batch to store records
     batch = []
+    metadata = json.dumps({"root_directory": root_directory})
 
     try:
         # Walk through directories
@@ -119,12 +136,12 @@ def process_zip_archives_to_sqlite(conn, root_directory, batch_size=10):
                                     raw_text = extract_pdf_text_from_zip(zip_path, pdf_filename)
 
                                     # Add to batch
-                                    batch.append((relative_zip_path, pdf_filename, raw_text))
+                                    batch.append((relative_zip_path, unquote(pdf_filename), raw_text, metadata))
 
                                     # Insert batch when it reaches batch_size
                                     if len(batch) >= batch_size:
                                         cursor.executemany(
-                                            'INSERT INTO pdf_contents (zip_path, pdf_filename, raw_text) VALUES (?, ?, ?)',
+                                            'INSERT INTO pdf_contents (zip_path, pdf_filename, raw_text, metadata) VALUES (?, ?, ?, ?)',
                                             batch
                                         )
                                         conn.commit()
@@ -141,7 +158,7 @@ def process_zip_archives_to_sqlite(conn, root_directory, batch_size=10):
         # Insert any remaining records
         if batch:
             cursor.executemany(
-                'INSERT INTO pdf_contents (zip_path, pdf_filename, raw_text) VALUES (?, ?, ?)',
+                'INSERT INTO pdf_contents (zip_path, pdf_filename, raw_text, metadata) VALUES (?, ?, ?, ?)',
                 batch
             )
             conn.commit()
@@ -152,20 +169,17 @@ def process_zip_archives_to_sqlite(conn, root_directory, batch_size=10):
 
 # Main execution
 def main():
-    # Paths
-    root_directory = '/path/to/your/zip/archives'
-    db_path = 'pdf_archive.db'
+    root_directory = input("Введите путь к директории с ZIP-архивами: ").strip()
+    db_path = 'archive.db'
 
     conn = create_pdf_contents_table(db_path)
 
     if conn:
         try:
-            # 2. Process archives
             process_zip_archives_to_sqlite(conn, root_directory)
             print("PDF contents have been processed and stored in the database.")
 
         finally:
-            # Always close the connection
             conn.close()
     else:
         print("Failed to create database connection.")
