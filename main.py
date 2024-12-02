@@ -4,6 +4,10 @@ import zipfile
 import sqlite3
 import PyPDF2
 from urllib.parse import unquote
+
+from db_manager import PDFArchiveDatabaseManager
+
+
 # from transformers import pipeline
 
 def extract_pdf_text_from_zip(zip_path, pdf_filename, max_pages=10, max_chars=10000):
@@ -101,18 +105,16 @@ def write_to_file(error, zip_path, pdf_filename='', output_file='pdf_index.txt')
         f.write(f"pdf_filename: {pdf_filename}\n")
         f.write(f"error: {error}\n\n")
 
-def process_zip_archives_to_sqlite(conn, root_directory, batch_size=10):
+
+def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
     """
     Process ZIP archives and write PDF contents to SQLite database in batches
 
     Args:
-    - conn: SQLite database connection
+    - db_manager: PDFArchiveDatabaseManager instance
     - root_directory: Root directory containing ZIP archives
     - batch_size: Number of records to insert in a single batch
     """
-    # Create cursor
-    cursor = conn.cursor()
-
     # Batch to store records
     batch = []
     metadata = json.dumps({"root_directory": root_directory})
@@ -129,6 +131,7 @@ def process_zip_archives_to_sqlite(conn, root_directory, batch_size=10):
                             # Find PDF files in the archive
                             pdf_files = [f for f in zip_ref.namelist() if f.lower().endswith('.pdf')]
                             relative_zip_path = os.path.relpath(zip_path, root_directory)
+
                             # Process each PDF
                             for pdf_filename in pdf_files:
                                 try:
@@ -140,11 +143,7 @@ def process_zip_archives_to_sqlite(conn, root_directory, batch_size=10):
 
                                     # Insert batch when it reaches batch_size
                                     if len(batch) >= batch_size:
-                                        cursor.executemany(
-                                            'INSERT INTO pdf_contents (zip_path, pdf_filename, raw_text, metadata) VALUES (?, ?, ?, ?)',
-                                            batch
-                                        )
-                                        conn.commit()
+                                        db_manager.insert_pdf_contents_batch(batch)
                                         batch = []  # Reset batch
 
                                 except Exception as pdf_error:
@@ -157,32 +156,41 @@ def process_zip_archives_to_sqlite(conn, root_directory, batch_size=10):
 
         # Insert any remaining records
         if batch:
-            cursor.executemany(
-                'INSERT INTO pdf_contents (zip_path, pdf_filename, raw_text, metadata) VALUES (?, ?, ?, ?)',
-                batch
-            )
-            conn.commit()
+            db_manager.insert_pdf_contents_batch(batch)
 
     except Exception as e:
         print(f"Unexpected error: {e}")
 
 
+def insert_batch(batch, conn, cursor):
+    cursor.executemany(
+        'INSERT INTO pdf_contents (zip_path, pdf_filename, raw_text, metadata) VALUES (?, ?, ?, ?)',
+        batch
+    )
+    conn.commit()
+
+
 # Main execution
 def main():
+    # Get root directory from user input
     root_directory = input("Введите путь к директории с ZIP-архивами: ").strip()
-    db_path = 'archive.db'
 
-    conn = create_pdf_contents_table(db_path)
+    # Use context manager to handle database connection
+    with PDFArchiveDatabaseManager('archive.db') as db_manager:
+        # Create database schema
+        conn = db_manager.create_database_schema()
 
-    if conn:
-        try:
-            process_zip_archives_to_sqlite(conn, root_directory)
-            print("PDF contents have been processed and stored in the database.")
+        if conn:
+            try:
+                # Process ZIP archives
+                process_zip_archives_to_sqlite(db_manager, root_directory)
+                print("PDF contents have been processed and stored in the database.")
 
-        finally:
-            conn.close()
-    else:
-        print("Failed to create database connection.")
+            except Exception as e:
+                print(f"Error during processing: {e}")
+
+        else:
+            print("Failed to create database connection.")
 
 
 # Run the script
