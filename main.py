@@ -47,58 +47,6 @@ def extract_pdf_text_from_zip(zip_path, pdf_filename, max_pages=10, max_chars=10
 #     summaries = summarizer(text, max_length=max_length, min_length=min_length, do_sample=False)
 #     return summaries[0]['summary_text']
 
-
-def create_pdf_contents_table(db_path='archive.db'):
-    """
-    Create PDF contents table in SQLite database with simplified schema
-    Args:
-    - db_path: Path to SQLite database
-    Returns:
-    - sqlite3.Connection object
-    """
-    try:
-        # Establish database connection
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        # Create main table with fields
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS pdf_contents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                zip_path TEXT,
-                pdf_filename TEXT,
-                raw_text TEXT,
-                metadata TEXT DEFAULT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        # Create virtual table for full-text search
-        cursor.execute('''
-            CREATE VIRTUAL TABLE IF NOT EXISTS pdf_contents_fts 
-            USING fts5(raw_text)
-        ''')
-        # Trigger to synchronize main table and FTS
-        cursor.execute('''
-            CREATE TRIGGER IF NOT EXISTS after_insert_pdf_contents 
-            AFTER INSERT ON pdf_contents BEGIN
-                INSERT INTO pdf_contents_fts(rowid, raw_text) 
-                VALUES (NEW.id, NEW.raw_text);
-            END
-        ''')
-        cursor.execute('''
-            CREATE TRIGGER IF NOT EXISTS after_update_pdf_contents 
-            AFTER UPDATE ON pdf_contents BEGIN
-                UPDATE pdf_contents_fts 
-                SET raw_text = NEW.raw_text 
-                WHERE rowid = NEW.id;
-            END
-        ''')
-        # Commit changes
-        conn.commit()
-        return conn
-    except sqlite3.Error as e:
-        print(f"Error creating database: {e}")
-        return None
-
 def write_to_file(error, zip_path, pdf_filename='', output_file='pdf_index.txt'):
     with open(output_file, 'a', encoding='utf-8') as f:
         f.write(f"zip_path: {zip_path}\n")
@@ -118,6 +66,9 @@ def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
     # Batch to store records
     batch = []
     metadata = json.dumps({"root_directory": root_directory})
+    last_entry = db_manager.get_last_entry()
+    last_processed_pdf = last_entry['pdf_filename'] if last_entry else None
+    entity_count = last_entry['id'] if last_entry else None
 
     try:
         # Walk through directories
@@ -132,16 +83,24 @@ def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
                             pdf_files = [f for f in zip_ref.namelist() if f.lower().endswith('.pdf')]
                             relative_zip_path = os.path.relpath(zip_path, root_directory)
 
-                            # Process each PDF
+                            # Skip this archive if entity_count > total_pdfs
+                            total_pdfs = len(pdf_files)
+                            if entity_count is not None and entity_count > total_pdfs:
+                                entity_count -= total_pdfs
+                                continue
+
                             for pdf_filename in pdf_files:
                                 try:
-                                    # Extract raw text
+                                    unicode_filename = unquote(pdf_filename)
+                                    if last_processed_pdf and unicode_filename == last_processed_pdf:
+                                        last_processed_pdf = None  # Сбрасываем, как только достигли последнего обработанного
+                                        continue  # Пропускаем последний обработанный файл
+                                    if last_processed_pdf:  # Пока не достигли последнего файла
+                                        continue
+
                                     raw_text = extract_pdf_text_from_zip(zip_path, pdf_filename)
+                                    batch.append((relative_zip_path, unicode_filename, raw_text, metadata))
 
-                                    # Add to batch
-                                    batch.append((relative_zip_path, unquote(pdf_filename), raw_text, metadata))
-
-                                    # Insert batch when it reaches batch_size
                                     if len(batch) >= batch_size:
                                         db_manager.insert_pdf_contents_batch(batch)
                                         batch = []  # Reset batch
@@ -162,35 +121,28 @@ def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
         print(f"Unexpected error: {e}")
 
 
-def insert_batch(batch, conn, cursor):
-    cursor.executemany(
-        'INSERT INTO pdf_contents (zip_path, pdf_filename, raw_text, metadata) VALUES (?, ?, ?, ?)',
-        batch
-    )
-    conn.commit()
-
-
 # Main execution
 def main():
     # Get root directory from user input
+    db_name = 'archive_test.db'
     root_directory = input("Введите путь к директории с ZIP-архивами: ").strip()
+    db_path = input("Введите путь к базе данных (нажмите Enter для использования значения по умолчанию): ").strip()
+    if not db_path:
+        db_path = ''
 
-    # Use context manager to handle database connection
-    with PDFArchiveDatabaseManager('archive.db') as db_manager:
-        # Create database schema
-        conn = db_manager.create_database_schema()
+    db_manager = PDFArchiveDatabaseManager(os.path.join(db_path, db_name))
 
-        if conn:
-            try:
-                # Process ZIP archives
-                process_zip_archives_to_sqlite(db_manager, root_directory)
-                print("PDF contents have been processed and stored in the database.")
+    conn = db_manager.create_database_schema()
 
-            except Exception as e:
-                print(f"Error during processing: {e}")
+    if conn:
+        try:
+            process_zip_archives_to_sqlite(db_manager, root_directory)
+            print("PDF contents have been processed and stored in the database.")
 
-        else:
-            print("Failed to create database connection.")
+        finally:
+            conn.close()
+    else:
+        print("Failed to create database connection.")
 
 
 # Run the script

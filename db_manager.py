@@ -94,3 +94,18 @@ class PDFArchiveDatabaseManager:
         except sqlite3.Error as e:
             print(f"Error inserting batch: {e}")
             self.conn.rollback()
+
+    def get_last_entry(self):
+        """
+        Retrieve the last processed entry from the database
+
+        Returns:
+        - Dictionary with the last entry (id, pdf_filename) or None if table is empty
+        """
+        try:
+            self.cursor.execute("SELECT id, pdf_filename FROM pdf_contents ORDER BY id DESC LIMIT 1")
+            row = self.cursor.fetchone()
+            return {'id': row[0], 'pdf_filename': row[1]} if row else None
+        except sqlite3.Error as e:
+            print(f"Error retrieving last entry: {e}")
+            return None
