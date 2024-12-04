@@ -1,14 +1,9 @@
 import json
 import os
 import zipfile
-import sqlite3
 import PyPDF2
 from urllib.parse import unquote
-
 from db_manager import PDFArchiveDatabaseManager
-
-
-# from transformers import pipeline
 
 def extract_pdf_text_from_zip(zip_path, pdf_filename, max_pages=10, max_chars=10000):
     """
@@ -32,7 +27,7 @@ def extract_pdf_text_from_zip(zip_path, pdf_filename, max_pages=10, max_chars=10
                 for page in pdf_reader.pages[:max_pages]:
                     full_text += page.extract_text()
 
-                cleaned_text = ' '.join(full_text.split())  # Remove extra whitespace
+                cleaned_text = ' '.join(full_text.split())
                 truncated_text = cleaned_text[:max_chars]
 
                 return truncated_text
@@ -41,13 +36,7 @@ def extract_pdf_text_from_zip(zip_path, pdf_filename, max_pages=10, max_chars=10
         return f"Error extracting text: {str(e)}"
 
 
-# def summarize_text(text, max_length=150, min_length=50):
-#     """Generate a concise summary of the text"""
-#     summarizer = pipeline("summarization")
-#     summaries = summarizer(text, max_length=max_length, min_length=min_length, do_sample=False)
-#     return summaries[0]['summary_text']
-
-def write_to_file(error, zip_path, pdf_filename='', output_file='pdf_index.txt'):
+def write_to_file(error, zip_path, pdf_filename='', output_file='pdf_error.txt'):
     with open(output_file, 'a', encoding='utf-8') as f:
         f.write(f"zip_path: {zip_path}\n")
         f.write(f"pdf_filename: {pdf_filename}\n")
@@ -63,7 +52,6 @@ def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
     - root_directory: Root directory containing ZIP archives
     - batch_size: Number of records to insert in a single batch
     """
-    # Batch to store records
     batch = []
     metadata = json.dumps({"root_directory": root_directory})
     last_entry = db_manager.get_last_entry()
@@ -71,7 +59,6 @@ def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
     entity_count = last_entry['id'] if last_entry else None
 
     try:
-        # Walk through directories
         for root, dirs, files in os.walk(root_directory):
             for file in files:
                 if file.lower().endswith('.zip'):
@@ -79,7 +66,6 @@ def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
 
                     try:
                         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                            # Find PDF files in the archive
                             pdf_files = [f for f in zip_ref.namelist() if f.lower().endswith('.pdf')]
                             relative_zip_path = os.path.relpath(zip_path, root_directory)
 
@@ -121,9 +107,7 @@ def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
         print(f"Unexpected error: {e}")
 
 
-# Main execution
 def main():
-    # Get root directory from user input
     db_name = 'archive_test.db'
     root_directory = input("Введите путь к директории с ZIP-архивами: ").strip()
     db_path = input("Введите путь к базе данных (нажмите Enter для использования значения по умолчанию): ").strip()
@@ -145,6 +129,5 @@ def main():
         print("Failed to create database connection.")
 
 
-# Run the script
 if __name__ == "__main__":
     main()
