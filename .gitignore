@@ -1,2 +1,4 @@
 /archive.db
 /pdf_error.txt
+.idea
+*.pyc
