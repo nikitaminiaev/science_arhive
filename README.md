@@ -44,13 +44,112 @@ The search index is linked to metadata via `rowid` mapping.
 
 - Python 3.8+
 
+## Установка на Windows
+
+### Шаг 1: Установка Python
+
+1. Скачайте Python с официального сайта: https://www.python.org/downloads/windows/
+2. Выберите версию Python 3.8 или выше
+3. При установке обязательно поставьте галочку "Add Python to PATH"
+4. Проверьте установку, открыв командную строку (Win+R → cmd) и выполнив:
+   ```cmd
+   python --version
+   pip --version
+   ```
+
+### Шаг 2: Подготовка проекта
+
+1. Скачайте проект (например, как ZIP-архив с GitHub)
+2. Распакуйте в удобную папку, например: `C:\pdf_archive`
+3. Откройте командную строку от имени администратора
+4. Перейдите в папку проекта:
+   ```cmd
+   cd C:\pdf_archive
+   ```
+
+### Шаг 3: Установка зависимостей
+
+Выполните команду:
+```cmd
+pip install PyPDF2
+```
+
+### Шаг 4: Запуск
+
+#### Создание базы данных:
+```cmd
+python filling_db.py
+```
+
+При запросе пути к ZIP-архивам введите полный путь, например:
+```
+C:\Users\YourName\Documents\PDFs
+D:\Архивы\PDF_коллекция  
+C:\Downloads\Books_and_Papers
+```
+
+При запросе пути к базе данных можно просто нажать Enter (сохранится в папке программы).
+
+#### Поиск по базе данных:
+```cmd
+python search.py
+```
+
+### Возможные проблемы на Windows
+
+#### Проблема с кодировкой
+Если возникают ошибки с русскими символами, добавьте в начало командной строки:
+```cmd
+chcp 65001
+```
+
+#### Проблема с путями
+Используйте прямые слеши или двойные обратные слеши в путях:
+- Правильно: `C:/path/to/files` или `C:\\path\\to\\files`
+- Неправильно: `C:\path\to\files`
+
+#### Альтернативный способ запуска
+Если команда `python` не работает, попробуйте:
+```cmd
+py filling_db.py
+py search.py
+```
+
+### Создание bat-файлов для удобства
+
+Создайте файл `run_indexing.bat`:
+```batch
+@echo off
+chcp 65001 > nul
+cd /d "%~dp0"
+python filling_db.py
+pause
+```
+
+Создайте файл `run_search.bat`:
+```batch
+@echo off
+chcp 65001 > nul
+cd /d "%~dp0"
+python search.py
+pause
+```
+
+Теперь можно запускать программы двойным кликом по bat-файлам.
+
 ## Installation
 
+### Для Linux/Mac:
 1. Clone the repository
 2. Install required dependencies:
+   ```bash
+   pip install -r requirements.txt
    ```
-   pip install PyPDF2
-   ```
+
+### Для Windows:
+1. Скачайте проект и распакуйте в папку
+2. Запустите `install_dependencies.bat` двойным кликом
+3. Готово! Теперь можно использовать `run_indexing.bat` и `run_search.bat`
 
 ## Usage
 
