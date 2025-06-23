@@ -54,7 +54,7 @@ def check_database_integrity(db_path):
 
 def optimize_database_connection(db_path):
     """
-    Создает оптимизированное подключение к большой БД
+    Создает оптимизированное подключение к большой БД (только для чтения)
     """
     try:
         # Параметры для работы с большими БД
@@ -64,12 +64,13 @@ def optimize_database_connection(db_path):
             check_same_thread=False
         )
         
-        # Оптимизация для больших БД
-        conn.execute("PRAGMA cache_size = -1048576")  # 1GB кэш
-        conn.execute("PRAGMA temp_store = MEMORY")     # Временные данные в RAM
-        conn.execute("PRAGMA journal_mode = WAL")      # Write-Ahead Logging
-        conn.execute("PRAGMA synchronous = NORMAL")    # Быстрая синхронизация
-        conn.execute("PRAGMA mmap_size = 2147483648")  # 2GB memory-mapped I/O
+        # Оптимизация для больших БД (режим чтения)
+        conn.execute("PRAGMA cache_size = -2097152")   # 2 ГБ кэш (2*1024*1024 КБ)
+        conn.execute("PRAGMA temp_store = MEMORY")      # Временные данные в RAM
+        conn.execute("PRAGMA synchronous = OFF")        # Отключаем синхронизацию для чтения
+        conn.execute("PRAGMA journal_mode = MEMORY")    # Журнал в памяти для чтения
+        conn.execute("PRAGMA mmap_size = 4294967296")   # 4 ГБ memory-mapped I/O
+        conn.execute("PRAGMA read_uncommitted = true")  # Грязное чтение для скорости
         
         return conn
         
@@ -129,23 +130,23 @@ def search_database():
     file_size_mb = file_size / (1024 * 1024)
     print(f"📊 Размер файла БД: {file_size_mb:.1f} МБ")
     
-    if file_size_mb > 100:
-        print("⚠️  Обнаружена большая база данных. Выполняется диагностика...")
+    # if file_size_mb > 100:
+    #     print("⚠️  Обнаружена большая база данных. Выполняется диагностика...")
         
-        # Проверяем целостность
-        if not check_database_integrity(db_path):
-            print("\n🔧 База данных повреждена. Попытка восстановления...")
-            repaired_path = repair_database(db_path)
-            if repaired_path:
-                use_backup = input(f"Использовать восстановленную БД {repaired_path}? (y/n): ").strip().lower()
-                if use_backup == 'y':
-                    db_path = repaired_path
-                else:
-                    print("❌ Работа с поврежденной БД невозможна")
-                    return
-            else:
-                print("❌ Восстановление не удалось")
-                return
+    #     # Проверяем целостность
+    #     if not check_database_integrity(db_path):
+    #         print("\n🔧 База данных повреждена. Попытка восстановления...")
+    #         repaired_path = repair_database(db_path)
+    #         if repaired_path:
+    #             use_backup = input(f"Использовать восстановленную БД {repaired_path}? (y/n): ").strip().lower()
+    #             if use_backup == 'y':
+    #                 db_path = repaired_path
+    #             else:
+    #                 print("❌ Работа с поврежденной БД невозможна")
+    #                 return
+    #         else:
+    #             print("❌ Восстановление не удалось")
+    #             return
     
     try:
         # Создаем оптимизированное подключение
