@@ -3,8 +3,50 @@ import os
 import zipfile
 import PyPDF2
 import io
+import logging
+import warnings
 from urllib.parse import unquote
 from db_manager import PDFArchiveDatabaseManager
+
+# Подавляем предупреждения PyPDF2
+warnings.filterwarnings("ignore", category=UserWarning, module="PyPDF2")
+logging.getLogger("PyPDF2").setLevel(logging.ERROR)
+
+def clean_text_encoding(text):
+    """
+    Очищает текст от проблемных символов Unicode, включая суррогатные пары
+    
+    Args:
+    - text: Исходный текст
+    
+    Returns:
+    - Очищенный текст, безопасный для UTF-8
+    """
+    if not isinstance(text, str):
+        return str(text)
+    
+    if not text:
+        return text
+    
+    try:
+        # Сначала пробуем простое кодирование/декодирование с заменой ошибок
+        cleaned = text.encode('utf-8', errors='replace').decode('utf-8')
+        
+        # Дополнительно удаляем суррогатные символы
+        cleaned_chars = []
+        for char in cleaned:
+            char_code = ord(char)
+            # Исключаем суррогатные символы (U+D800 до U+DFFF)
+            if not (0xD800 <= char_code <= 0xDFFF):
+                cleaned_chars.append(char)
+            else:
+                cleaned_chars.append('?')
+        
+        return ''.join(cleaned_chars)
+        
+    except Exception as e:
+        # В крайнем случае возвращаем строку с заменёнными символами
+        return str(text).encode('utf-8', errors='replace').decode('utf-8')
 
 def extract_pdf_text_from_zip(zip_path, pdf_filename, max_pages=10, max_chars=10000):
     """
@@ -35,7 +77,10 @@ def extract_pdf_text_from_zip(zip_path, pdf_filename, max_pages=10, max_chars=10
 
             full_text = ""
             for page in pdf_reader.pages[:max_pages]:
-                full_text += page.extract_text()
+                page_text = page.extract_text()
+                # Очищаем текст от проблемных символов
+                clean_page_text = clean_text_encoding(page_text)
+                full_text += clean_page_text
 
             cleaned_text = ' '.join(full_text.split())
             truncated_text = cleaned_text[:max_chars]
@@ -45,14 +90,21 @@ def extract_pdf_text_from_zip(zip_path, pdf_filename, max_pages=10, max_chars=10
     except Exception as e:
         error_msg = f"Error extracting text from {pdf_filename}: {str(e)}"
         print(f"⚠️  {error_msg}")
-        return error_msg, None, None
+        # Также очищаем сообщение об ошибке
+        clean_error_msg = clean_text_encoding(error_msg)
+        return clean_error_msg, None, None
 
 
 def write_to_file(error, zip_path, pdf_filename='', output_file='pdf_error.txt'):
-    with open(output_file, 'a', encoding='utf-8') as f:
-        f.write(f"zip_path: {zip_path}\n")
-        f.write(f"pdf_filename: {pdf_filename}\n")
-        f.write(f"error: {error}\n\n")
+    with open(output_file, 'a', encoding='utf-8', errors='replace') as f:
+        # Очищаем все строки от проблемных символов перед записью
+        clean_zip_path = clean_text_encoding(str(zip_path))
+        clean_pdf_filename = clean_text_encoding(str(pdf_filename))
+        clean_error = clean_text_encoding(str(error))
+        
+        f.write(f"zip_path: {clean_zip_path}\n")
+        f.write(f"pdf_filename: {clean_pdf_filename}\n")
+        f.write(f"error: {clean_error}\n\n")
 
 
 def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
@@ -110,7 +162,12 @@ def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
                                         continue
 
                                     raw_text, file_size, pages_count = extract_pdf_text_from_zip(zip_path, pdf_filename)
-                                    batch.append((relative_zip_path, unicode_filename, raw_text, metadata, file_size, pages_count))
+                                    # Дополнительная очистка данных перед сохранением в БД
+                                    clean_raw_text = clean_text_encoding(str(raw_text)) if raw_text else raw_text
+                                    clean_unicode_filename = clean_text_encoding(unicode_filename)
+                                    clean_relative_zip_path = clean_text_encoding(relative_zip_path)
+                                    
+                                    batch.append((clean_relative_zip_path, clean_unicode_filename, clean_raw_text, metadata, file_size, pages_count))
                                     
                                     processed_count += 1
                                     if processed_count % 10 == 0:
