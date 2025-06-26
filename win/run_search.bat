@@ -6,7 +6,7 @@ echo   PDF Archive Database Manager
 echo   Поиск по базе данных
 echo ===================================
 echo.
-python search.py
+python ../search.py
 echo.
 echo Нажмите любую клавишу для выхода...
 pause > nul 

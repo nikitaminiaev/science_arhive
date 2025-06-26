@@ -4,8 +4,6 @@
 import os
 import json
 import sqlite3
-import sys
-from db_manager import PDFArchiveDatabaseManager
 
 
 def check_database_integrity(db_path):

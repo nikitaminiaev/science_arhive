@@ -6,7 +6,7 @@ import io
 import logging
 import warnings
 from urllib.parse import unquote
-from db_manager import PDFArchiveDatabaseManager
+from src.db_manager import PDFArchiveDatabaseManager
 
 # Подавляем предупреждения PyPDF2
 warnings.filterwarnings("ignore", category=UserWarning, module="PyPDF2")

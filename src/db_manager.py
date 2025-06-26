@@ -157,3 +157,92 @@ class PDFArchiveDatabaseManager:
         except sqlite3.Error as e:
             print(f"Error retrieving last entry: {e}")
             return None
+
+    def insert_pdf_content(self, zip_path, pdf_filename, raw_text, metadata, file_size=None, pages_count=None):
+        """
+        Insert a single PDF content into the database
+        
+        Args:
+        - zip_path: Path to the ZIP archive
+        - pdf_filename: Name of the PDF file
+        - raw_text: Extracted text content
+        - metadata: Metadata as JSON string or dict
+        - file_size: Size of the PDF file (optional)
+        - pages_count: Number of pages in PDF (optional)
+        """
+        if not self.conn or not self.cursor:
+            raise RuntimeError("Database connection not established. Call create_database_schema() first.")
+
+        try:
+            # Parse metadata if it's a string
+            if isinstance(metadata, str):
+                try:
+                    metadata_dict = json.loads(metadata)
+                except (json.JSONDecodeError, TypeError):
+                    metadata_dict = {}
+            elif metadata is None:
+                metadata_dict = {}
+            else:
+                metadata_dict = metadata
+
+            # Add file size and pages count to metadata
+            if file_size is not None:
+                metadata_dict['file_size'] = file_size
+            if pages_count is not None:
+                metadata_dict['pages_count'] = pages_count
+
+            # Convert back to JSON string
+            metadata_json = json.dumps(metadata_dict)
+
+            # Insert metadata
+            self.cursor.execute(
+                'INSERT OR IGNORE INTO pdf_metadata (zip_path, pdf_filename, metadata) VALUES (?, ?, ?)',
+                (zip_path, pdf_filename, metadata_json)
+            )
+
+            # Get the ID of the inserted or existing record
+            self.cursor.execute(
+                'SELECT id FROM pdf_metadata WHERE zip_path = ? AND pdf_filename = ?',
+                (zip_path, pdf_filename)
+            )
+            result = self.cursor.fetchone()
+            
+            if result:
+                record_id = result[0]
+                # Insert into FTS index
+                self.cursor.execute(
+                    'INSERT OR REPLACE INTO pdf_search_index(rowid, content) VALUES (?, ?)',
+                    (record_id, raw_text)
+                )
+
+            self.conn.commit()
+
+        except sqlite3.Error as e:
+            print(f"Error inserting PDF content: {e}")
+            self.conn.rollback()
+            raise
+
+    def pdf_exists(self, zip_path, pdf_filename):
+        """
+        Check if a PDF file already exists in the database
+        
+        Args:
+        - zip_path: Path to the ZIP archive
+        - pdf_filename: Name of the PDF file
+        
+        Returns:
+        - True if exists, False otherwise
+        """
+        if not self.conn or not self.cursor:
+            raise RuntimeError("Database connection not established. Call create_database_schema() first.")
+
+        try:
+            self.cursor.execute(
+                'SELECT id FROM pdf_metadata WHERE zip_path = ? AND pdf_filename = ? LIMIT 1',
+                (zip_path, pdf_filename)
+            )
+            return self.cursor.fetchone() is not None
+
+        except sqlite3.Error as e:
+            print(f"Error checking PDF existence: {e}")
+            return False
