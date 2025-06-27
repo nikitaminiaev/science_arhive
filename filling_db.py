@@ -14,6 +14,11 @@ warnings.filterwarnings("ignore", category=UserWarning, module="PyPDF2")
 logging.getLogger("PyPDF2").setLevel(logging.ERROR)
 TIMEOUT = 60
 
+# Список архивов для пропуска (проблемные архивы)
+SKIP_ARCHIVES = [
+    'libgen.scimag39611000-39611999.zip'
+]
+
 def clean_text_encoding(text):
     """
     Очищает текст от проблемных символов Unicode, включая суррогатные пары
@@ -142,6 +147,12 @@ def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
                 if file.lower().endswith('.zip'):
                     current_archive += 1
                     zip_path = os.path.join(root, file)
+                    
+                    # Проверяем, не находится ли архив в списке исключений
+                    if file in SKIP_ARCHIVES:
+                        print(f"⏭️  [{current_archive}/{total_archives}] Пропускаем: {file} (в списке исключений)")
+                        continue
+                        
                     print(f"📁 [{current_archive}/{total_archives}] Обработка: {file}")
 
                     try:
