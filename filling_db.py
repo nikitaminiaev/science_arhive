@@ -133,7 +133,7 @@ def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
         total_archives += len([f for f in files if f.lower().endswith('.zip')])
     
     print(f"📦 Найдено ZIP архивов: {total_archives}")
-    print(f"⏰ Установлен таймаут 60 секунд для обработки каждого PDF файла")
+    print(f"⏰ Установлен таймаут {TIMEOUT} секунд для обработки PDF файлов и получения списка файлов из архивов")
     current_archive = 0
 
     try:
@@ -145,8 +145,15 @@ def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
                     print(f"📁 [{current_archive}/{total_archives}] Обработка: {file}")
 
                     try:
+                        # Получаем список файлов с таймаутом
+                        all_files = get_zip_namelist_with_timeout(zip_path)
+                        if all_files is None:
+                            print(f"   ⏭️  Пропускаем архив {file} (таймаут при получении списка файлов)")
+                            continue
+                        
+                        pdf_files = [f for f in all_files if f.lower().endswith('.pdf')]
+                        
                         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                            pdf_files = [f for f in zip_ref.namelist() if f.lower().endswith('.pdf')]
                             relative_zip_path = os.path.relpath(zip_path, root_directory)
 
                             # Skip this archive if entity_count > total_pdfs
@@ -208,38 +215,70 @@ def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
         print(f"Unexpected error: {e}")
 
 
+def execute_with_timeout(func, timeout, error_context, zip_path, pdf_filename=None, fallback_result=None):
+    """
+    Универсальная функция для выполнения любой операции с таймаутом
+    
+    Args:
+    - func: Функция для выполнения
+    - timeout: Таймаут в секундах
+    - error_context: Описание операции для логирования ошибок
+    - zip_path: Путь к ZIP архиву (для логирования)
+    - pdf_filename: Имя PDF файла (опционально, для логирования)
+    - fallback_result: Результат, возвращаемый при ошибке/таймауте
+    
+    Returns:
+    - Результат выполнения функции или fallback_result при ошибке
+    """
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(func)
+            result = future.result(timeout=timeout)
+            return result
+    except FuturesTimeoutError:
+        error_msg = f"⏰ Таймаут при {error_context} (превышено {timeout} секунд)"
+        print(f"🚨 {error_msg}")
+        write_to_file(f"TIMEOUT: {error_msg}", zip_path, pdf_filename or '')
+        return fallback_result
+    except Exception as e:
+        error_msg = f"Ошибка при {error_context}: {str(e)}"
+        print(f"🚨 {error_msg}")
+        write_to_file(error_msg, zip_path, pdf_filename or '')
+        return fallback_result
+
+
 def extract_pdf_text_with_timeout(zip_path, pdf_filename, max_pages=10, max_chars=10000, timeout=TIMEOUT):
     """
     Извлекает текст из PDF с таймаутом
-    
-    Args:
-    - zip_path: Путь к ZIP архиву
-    - pdf_filename: Имя PDF файла в архиве
-    - max_pages: Максимальное количество страниц для извлечения
-    - max_chars: Максимальное количество символов для извлечения
-    - timeout: Таймаут в секундах (по умолчанию 60)
-    
-    Returns:
-    - Tuple: (extracted_text, file_size, pages_count) или (None, None, None) при таймауте
     """
     def _extract():
         return extract_pdf_text_from_zip(zip_path, pdf_filename, max_pages, max_chars)
     
-    try:
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_extract)
-            result = future.result(timeout=timeout)
-            return result
-    except FuturesTimeoutError:
-        error_msg = f"⏰ Таймаут при обработке {pdf_filename} (превышено {timeout} секунд)"
-        print(f"⚠️  {error_msg}")
-        write_to_file(f"TIMEOUT: {error_msg}", zip_path, pdf_filename)
-        return None, None, None
-    except Exception as e:
-        error_msg = f"Ошибка при обработке с таймаутом {pdf_filename}: {str(e)}"
-        print(f"⚠️  {error_msg}")
-        write_to_file(error_msg, zip_path, pdf_filename)
-        return None, None, None
+    return execute_with_timeout(
+        func=_extract,
+        timeout=timeout,
+        error_context=f"обработке {pdf_filename}",
+        zip_path=zip_path,
+        pdf_filename=pdf_filename,
+        fallback_result=(None, None, None)
+    )
+
+
+def get_zip_namelist_with_timeout(zip_path, timeout=TIMEOUT):
+    """
+    Получает список файлов из ZIP архива с таймаутом
+    """
+    def _get_namelist():
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            return zip_ref.namelist()
+    
+    return execute_with_timeout(
+        func=_get_namelist,
+        timeout=timeout,
+        error_context=f"получении списка файлов из {os.path.basename(zip_path)}",
+        zip_path=zip_path,
+        fallback_result=None
+    )
 
 
 def main():
