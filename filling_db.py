@@ -6,11 +6,13 @@ import io
 import logging
 import warnings
 from urllib.parse import unquote
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from src.db_manager import PDFArchiveDatabaseManager
 
 # Подавляем предупреждения PyPDF2
 warnings.filterwarnings("ignore", category=UserWarning, module="PyPDF2")
 logging.getLogger("PyPDF2").setLevel(logging.ERROR)
+TIMEOUT = 60
 
 def clean_text_encoding(text):
     """
@@ -131,6 +133,7 @@ def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
         total_archives += len([f for f in files if f.lower().endswith('.zip')])
     
     print(f"📦 Найдено ZIP архивов: {total_archives}")
+    print(f"⏰ Установлен таймаут 60 секунд для обработки каждого PDF файла")
     current_archive = 0
 
     try:
@@ -161,7 +164,13 @@ def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
                                     if last_processed_pdf:  # Пока не достигли последнего файла
                                         continue
 
-                                    raw_text, file_size, pages_count = extract_pdf_text_from_zip(zip_path, pdf_filename)
+                                    raw_text, file_size, pages_count = extract_pdf_text_with_timeout(zip_path, pdf_filename, timeout=TIMEOUT)
+                                    
+                                    # Пропускаем файл, если произошел таймаут или другая ошибка
+                                    if raw_text is None:
+                                        print(f"   ⏭️  Пропускаем файл {unicode_filename} (таймаут или ошибка)")
+                                        continue
+                                    
                                     # Дополнительная очистка данных перед сохранением в БД
                                     clean_raw_text = clean_text_encoding(str(raw_text)) if raw_text else raw_text
                                     clean_unicode_filename = clean_text_encoding(unicode_filename)
@@ -197,6 +206,40 @@ def process_zip_archives_to_sqlite(db_manager, root_directory, batch_size=10):
 
     except Exception as e:
         print(f"Unexpected error: {e}")
+
+
+def extract_pdf_text_with_timeout(zip_path, pdf_filename, max_pages=10, max_chars=10000, timeout=TIMEOUT):
+    """
+    Извлекает текст из PDF с таймаутом
+    
+    Args:
+    - zip_path: Путь к ZIP архиву
+    - pdf_filename: Имя PDF файла в архиве
+    - max_pages: Максимальное количество страниц для извлечения
+    - max_chars: Максимальное количество символов для извлечения
+    - timeout: Таймаут в секундах (по умолчанию 60)
+    
+    Returns:
+    - Tuple: (extracted_text, file_size, pages_count) или (None, None, None) при таймауте
+    """
+    def _extract():
+        return extract_pdf_text_from_zip(zip_path, pdf_filename, max_pages, max_chars)
+    
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_extract)
+            result = future.result(timeout=timeout)
+            return result
+    except FuturesTimeoutError:
+        error_msg = f"⏰ Таймаут при обработке {pdf_filename} (превышено {timeout} секунд)"
+        print(f"⚠️  {error_msg}")
+        write_to_file(f"TIMEOUT: {error_msg}", zip_path, pdf_filename)
+        return None, None, None
+    except Exception as e:
+        error_msg = f"Ошибка при обработке с таймаутом {pdf_filename}: {str(e)}"
+        print(f"⚠️  {error_msg}")
+        write_to_file(error_msg, zip_path, pdf_filename)
+        return None, None, None
 
 
 def main():
